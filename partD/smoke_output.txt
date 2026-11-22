@@ -1,0 +1,81 @@
+=== 1. Part A, v1 deployed, expecting v1
+$ python partD/smoke_eta.py --url http://127.0.0.1:8000 --expect-version v1
+smoke test -> http://127.0.0.1:8000/v1/models/eta:predict  (format=rest, expect=v1, p95 budget=80.0 ms)
+PASS  health endpoint                             GET /healthz -> 200 {"status": "ok", "model_version": "v1"}
+PASS  expected model version                      status 200, model_version='v1', expected 'v1'
+PASS  output sanity + batch consistency           16/16 predictions, all finite in (0, 1440) min: True; batch == single-row for first 4: True
+PASS  sanity: longer distance never shortens ETA  distance_km [5.0, 25.0, 60.0] -> [36.8, 88.4, 178.7] (and 3 more contexts); violations: 0
+PASS  sanity: heavier traffic never shortens ETA  traffic_index [0.1, 0.9] -> [84.2, 118.4] (and 3 more contexts); violations: 0
+PASS  sanity: more stops never shortens ETA       n_stops [2, 12] -> [62.5, 105.8] (and 3 more contexts); violations: 0
+PASS  invalid input -> 422                        hour=25 -> 422, infeasible 200km/30 stops -> 422, empty batch -> 422
+PASS  p95 latency within budget                   single-row p95 = 0.9 ms over 50 requests (budget 80.0 ms)
+PASS  request id echoed                           echoed 'smoke-rid-1'
+
+9/9 checks not failing -> RELEASE ALLOWED (exit 0)
+exit code 0 (expected 0) -> as expected
+
+=== 2. Part A, v1 deployed, expecting v2 (negative control)
+$ python partD/smoke_eta.py --url http://127.0.0.1:8000/v1/models/eta:predict --expect-version v2
+smoke test -> http://127.0.0.1:8000/v1/models/eta:predict  (format=rest, expect=v2, p95 budget=80.0 ms)
+FAIL  health endpoint                             GET /healthz -> 200 {"status": "ok", "model_version": "v1"}
+FAIL  expected model version                      status 200, model_version='v1', expected 'v2'
+PASS  output sanity + batch consistency           16/16 predictions, all finite in (0, 1440) min: True; batch == single-row for first 4: True
+PASS  sanity: longer distance never shortens ETA  distance_km [5.0, 25.0, 60.0] -> [36.8, 88.4, 178.7] (and 3 more contexts); violations: 0
+PASS  sanity: heavier traffic never shortens ETA  traffic_index [0.1, 0.9] -> [84.2, 118.4] (and 3 more contexts); violations: 0
+PASS  sanity: more stops never shortens ETA       n_stops [2, 12] -> [62.5, 105.8] (and 3 more contexts); violations: 0
+PASS  invalid input -> 422                        hour=25 -> 422, infeasible 200km/30 stops -> 422, empty batch -> 422
+PASS  p95 latency within budget                   single-row p95 = 0.9 ms over 50 requests (budget 80.0 ms)
+PASS  request id echoed                           echoed 'smoke-rid-1'
+
+7/9 checks not failing -> RELEASE BLOCKED (exit 1): health endpoint, expected model version
+exit code 1 (expected 1) -> as expected
+
+=== 3. Part A, BROKEN constant-output 'v2' (negative control)
+$ python partD/smoke_eta.py --url http://127.0.0.1:8001 --expect-version v2
+smoke test -> http://127.0.0.1:8001/v1/models/eta:predict  (format=rest, expect=v2, p95 budget=80.0 ms)
+PASS  health endpoint                             GET /healthz -> 200 {"status": "ok", "model_version": "v2"}
+PASS  expected model version                      status 200, model_version='v2', expected 'v2'
+PASS  output sanity + batch consistency           16/16 predictions, all finite in (0, 1440) min: True; batch == single-row for first 4: True
+FAIL  sanity: longer distance never shortens ETA  distance_km [5.0, 25.0, 60.0] -> [122.6, 122.6, 122.6] (and 3 more contexts); violations: 4
+FAIL  sanity: heavier traffic never shortens ETA  traffic_index [0.1, 0.9] -> [122.6, 122.6] (and 3 more contexts); violations: 4
+FAIL  sanity: more stops never shortens ETA       n_stops [2, 12] -> [122.6, 122.6] (and 3 more contexts); violations: 4
+PASS  invalid input -> 422                        hour=25 -> 422, infeasible 200km/30 stops -> 422, empty batch -> 422
+PASS  p95 latency within budget                   single-row p95 = 1.0 ms over 50 requests (budget 80.0 ms)
+PASS  request id echoed                           echoed 'smoke-rid-1'
+
+6/9 checks not failing -> RELEASE BLOCKED (exit 1): sanity: longer distance never shortens ETA, sanity: heavier traffic never shortens ETA, sanity: more stops never shortens ETA
+exit code 1 (expected 1) -> as expected
+
+=== 4. Part B, mlflow models serve @candidate, expecting v2
+$ python partD/smoke_eta.py --url http://127.0.0.1:5102/invocations --expect-version v2
+smoke test -> http://127.0.0.1:5102/invocations  (format=mlflow, expect=v2, p95 budget=80.0 ms)
+PASS  health endpoint                             GET /ping -> 200
+PASS  expected model version                      status 200, model_version='v2', expected 'v2'
+PASS  output sanity + batch consistency           16/16 predictions, all finite in (0, 1440) min: True; batch == single-row for first 4: True
+PASS  sanity: longer distance never shortens ETA  distance_km [5.0, 25.0, 60.0] -> [31.3, 88.8, 186.7] (and 3 more contexts); violations: 0
+PASS  sanity: heavier traffic never shortens ETA  traffic_index [0.1, 0.9] -> [79.4, 131.8] (and 3 more contexts); violations: 0
+PASS  sanity: more stops never shortens ETA       n_stops [2, 12] -> [60.4, 107.2] (and 3 more contexts); violations: 0
+PASS  invalid input -> 422                        missing column -> 400 (MLflow schema errors are 400; it has no range checks)
+PASS  p95 latency within budget                   single-row p95 = 2.0 ms over 50 requests (budget 80.0 ms)
+SKIP  request id echoed                           server does not emit X-Request-ID (not part of its contract) -> skipped
+
+9/9 checks not failing -> RELEASE ALLOWED (exit 0)
+exit code 0 (expected 0) -> as expected
+
+=== 5. Part C, Ray Serve sticky canary with X-Beta: 1, expecting v2
+$ python partD/smoke_eta.py --url http://127.0.0.1:8100/v1/models/eta:predict --expect-version v2 --beta
+smoke test -> http://127.0.0.1:8100/v1/models/eta:predict  (format=rest, expect=v2, p95 budget=80.0 ms)
+PASS  health endpoint                             GET /healthz -> 200 {"status": "ok", "canary_weight": 0.1, "arms": {"v1": "prod", "v2": "candidate"}
+PASS  expected model version                      status 200, model_version='v2', expected 'v2'
+PASS  output sanity + batch consistency           16/16 predictions, all finite in (0, 1440) min: True; batch == single-row for first 4: True
+PASS  sanity: longer distance never shortens ETA  distance_km [5.0, 25.0, 60.0] -> [31.3, 88.8, 186.7] (and 3 more contexts); violations: 0
+PASS  sanity: heavier traffic never shortens ETA  traffic_index [0.1, 0.9] -> [79.4, 131.8] (and 3 more contexts); violations: 0
+PASS  sanity: more stops never shortens ETA       n_stops [2, 12] -> [60.4, 107.2] (and 3 more contexts); violations: 0
+PASS  invalid input -> 422                        hour=25 -> 422, infeasible 200km/30 stops -> 422, empty batch -> 422
+PASS  p95 latency within budget                   single-row p95 = 10.2 ms over 50 requests (budget 80.0 ms)
+PASS  request id echoed                           echoed 'smoke-rid-1'
+
+9/9 checks not failing -> RELEASE ALLOWED (exit 0)
+exit code 0 (expected 0) -> as expected
+
+scenarios behaving as expected: 5/5

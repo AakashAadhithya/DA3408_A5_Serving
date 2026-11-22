@@ -1,0 +1,19 @@
+# Shadow comparison: 200 identical single-row requests from data/eta_fresh.csv
+machine: 6 logical CPUs; servers: mlflow models serve -w 1 --env-manager local
+prod      :5101 -> models:/eta-model@prod      (registry v1) answered as ['v1']
+candidate :5102 -> models:/eta-model@candidate (registry v2) answered as ['v2']
+
+(i)   mean |prod - candidate|           = 9.48 min   (median 7.10, max 51.7)
+(ii)  requests differing by > 10 min    = 35.0%  (70/200)
+(iii) prod      latency p50 / p95 / p99 = 1.99 / 3.04 / 4.49 ms
+(iii) candidate latency p50 / p95 / p99 = 1.99 / 3.04 / 4.13 ms
+
+bonus (ground truth is available for these rows, i.e. 'delayed labels' arrived):
+      MAE prod = 11.42 min, MAE candidate = 6.11 min
+      candidate closer to truth on 66% of requests
+      the >10-min disagreements: rush-hour share 51% (vs 28% overall), mean distance 25.5 km (vs 23.4 km)
+
+# Alias resolution demo (registry is restored afterwards)
+moved alias prod -> registry v2;  running :5101 still answers: v1
+after restarting :5101 (alias re-resolved at start-up):  v2
+rollback: alias prod -> registry v1, restart:       v1

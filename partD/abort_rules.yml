@@ -1,0 +1,74 @@
+# Abort criteria for a 10 % canary of v2 (style of Monitoring/sample_rules.yml in the course repo).
+# Every alert compares v2 against v1 over the SAME window, so time-of-day effects cancel out.
+# Any firing alert in group eta-canary-abort => set the canary weight back to 0 (rollback).
+# Validate:  promtool check rules partD/abort_rules.yml   |   promtool test rules partD/abort_rules_test.yml
+groups:
+ - name: eta-canary-recording
+   rules:
+   - record: eta:request_rate:5m
+     expr: sum by (model_version) (rate(eta_requests_total{path="/v1/models/eta:predict"}[5m]))
+   - record: eta:error_ratio:5m
+     expr: |
+       sum by (model_version) (rate(eta_requests_total{path="/v1/models/eta:predict",status=~"5.."}[5m]))
+         / eta:request_rate:5m
+   - record: eta:latency_p95_seconds:5m
+     expr: histogram_quantile(0.95, sum by (model_version, le) (rate(eta_request_latency_seconds_bucket[5m])))
+   - record: eta:prediction_mean_minutes:30m
+     expr: |
+       sum by (model_version) (rate(eta_prediction_minutes_sum[30m]))
+         / sum by (model_version) (rate(eta_prediction_minutes_count[30m]))
+   # Delayed ground truth: a nightly/hourly job joins delivered orders with the ETA that was shown and exports
+   # eta_delivered_abs_error_minutes_{sum,count}{model_version, slice="all|rush|rain"}  (see REPORT.md).
+   - record: eta:delivered_mae_minutes:2h
+     expr: |
+       sum by (model_version, slice) (increase(eta_delivered_abs_error_minutes_sum[2h]))
+         / sum by (model_version, slice) (increase(eta_delivered_abs_error_minutes_count[2h]))
+   - record: eta:delivered_count:2h
+     expr: sum by (model_version, slice) (increase(eta_delivered_abs_error_minutes_count[2h]))
+
+ - name: eta-canary-abort
+   rules:
+   # A1  reliability: > 1 % of v2 predictions fail with 5xx over 5 min (only with >= 0.2 req/s of canary traffic)
+   - alert: CanaryErrorRateHigh
+     expr: |
+       eta:error_ratio:5m{model_version="v2"} > 0.01
+         and on (model_version) eta:request_rate:5m{model_version="v2"} > 0.2
+     for: 2m
+     labels: {severity: page, action: rollback, model_version: v2}
+     annotations:
+       summary: "v2 5xx ratio {{ $value | humanizePercentage }} over 5m (limit 1%) - abort canary"
+
+   # A2  latency SLO: v2 p95 above 80 ms over a 5 min window, sustained for 5 min
+   - alert: CanaryLatencySLOBreach
+     expr: eta:latency_p95_seconds:5m{model_version="v2"} > 0.080
+     for: 5m
+     labels: {severity: page, action: rollback, model_version: v2}
+     annotations:
+       summary: "v2 p95 latency {{ $value | humanizeDuration }} > 80ms SLO - abort canary"
+
+   # A3  accuracy on delivered orders (delayed labels): v2 MAE more than 5 % worse than v1 on ANY slice
+   #     (all / rush-hour / rain) over 2 h, once v2 has >= 200 delivered orders in that slice
+   - alert: CanaryAccuracyRegression
+     expr: |
+       (
+         eta:delivered_mae_minutes:2h{model_version="v2"}
+           > on (slice) 1.05 * eta:delivered_mae_minutes:2h{model_version="v1"}
+       )
+         and on (slice) eta:delivered_count:2h{model_version="v2"} >= 200
+     for: 10m
+     labels: {severity: ticket, action: rollback, model_version: v2}
+     annotations:
+       summary: "v2 delivered-order MAE on slice {{ $labels.slice }} is {{ $value }} min, > 1.05x v1 - abort canary"
+
+   # A4  output drift: mean predicted ETA of v2 differs from v1's by > 10 % over 30 min (v1 and v2 agree within
+   #     ~0.5 % on fresh data and the 30-min sampling error is ~1.6 %, so 10 % means a pipeline/unit bug)
+   - alert: CanaryPredictionShift
+     expr: |
+       abs(
+         eta:prediction_mean_minutes:30m{model_version="v2"}
+           - on () eta:prediction_mean_minutes:30m{model_version="v1"}
+       ) / on () eta:prediction_mean_minutes:30m{model_version="v1"} > 0.10
+     for: 15m
+     labels: {severity: page, action: rollback, model_version: v2}
+     annotations:
+       summary: "v2 mean predicted ETA differs from v1 by {{ $value | humanizePercentage }} over 30m - abort canary"

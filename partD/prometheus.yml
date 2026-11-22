@@ -1,0 +1,38 @@
+# Prometheus config for a 10 % canary of v2 (same layout as Monitoring/sample_prometheus.yml in the course repo).
+# Two Part A services run side by side; the load balancer sends 10 % of customers to v2:
+#   ETA_MODEL=data/eta_v1.joblib uvicorn --app-dir partA eta_app:app --port 8000     # prod  (90 %)
+#   ETA_MODEL=data/eta_v2.joblib uvicorn --app-dir partA eta_app:app --port 8002     # canary (10 %)
+# Run:  prometheus --config.file=partD/prometheus.yml      (from the submission root)
+global:
+  scrape_interval: 5s # Scrape every 5 seconds (the abort windows below are minutes long).
+  evaluation_interval: 15s # Evaluate recording and alerting rules every 15 seconds.
+
+# Alertmanager configuration (the canary controller / on-call receives the abort alerts)
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+           - 127.0.0.1:9093
+
+# Load rules once and periodically evaluate them according to the global 'evaluation_interval'.
+rule_files:
+    - "abort_rules.yml"
+
+scrape_configs:
+  # One job, one target per model version; `model_version` is attached at scrape time, so the
+  # application's own metric names stay exactly as the Part A contract defines them.
+  - job_name: "eta"
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["localhost:8000"]
+        labels:
+          model_version: "v1"
+          role: "prod"
+      - targets: ["localhost:8002"]
+        labels:
+          model_version: "v2"
+          role: "canary"
+
+  - job_name: "prometheus"
+    static_configs:
+      - targets: ["localhost:9090"]

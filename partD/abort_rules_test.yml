@@ -1,0 +1,116 @@
+# promtool unit tests for abort_rules.yml:   promtool test rules partD/abort_rules_test.yml
+# Synthetic 1-minute series: v1 (prod, 90 %) is healthy; v2 (canary, 10 %) is broken in four different ways.
+rule_files:
+  - abort_rules.yml
+
+evaluation_interval: 1m
+
+tests:
+  # ------------------------------------------------------------------ v2 unhealthy -> every abort alert fires
+  - interval: 1m
+    input_series:
+      # traffic: v1 10 req/s all 200; v2 1 req/s 200 + 0.05 req/s 500  (error ratio 3/63 = 4.8 %)
+      - series: 'eta_requests_total{model_version="v1",path="/v1/models/eta:predict",status="200"}'
+        values: '0+600x150'
+      - series: 'eta_requests_total{model_version="v2",path="/v1/models/eta:predict",status="200"}'
+        values: '0+60x150'
+      - series: 'eta_requests_total{model_version="v2",path="/v1/models/eta:predict",status="500"}'
+        values: '0+3x150'
+      # latency: v1 everything <= 10 ms; v2 only 50/63 requests <= 100 ms -> p95 lands above 80 ms
+      - series: 'eta_request_latency_seconds_bucket{model_version="v1",le="0.01"}'
+        values: '0+600x150'
+      - series: 'eta_request_latency_seconds_bucket{model_version="v1",le="0.1"}'
+        values: '0+600x150'
+      - series: 'eta_request_latency_seconds_bucket{model_version="v1",le="+Inf"}'
+        values: '0+600x150'
+      - series: 'eta_request_latency_seconds_bucket{model_version="v2",le="0.01"}'
+        values: '0+10x150'
+      - series: 'eta_request_latency_seconds_bucket{model_version="v2",le="0.1"}'
+        values: '0+50x150'
+      - series: 'eta_request_latency_seconds_bucket{model_version="v2",le="+Inf"}'
+        values: '0+63x150'
+      # predictions: v1 mean 125 min, v2 mean 150 min (+20 %)
+      - series: 'eta_prediction_minutes_sum{model_version="v1"}'
+        values: '0+75000x150'
+      - series: 'eta_prediction_minutes_count{model_version="v1"}'
+        values: '0+600x150'
+      - series: 'eta_prediction_minutes_sum{model_version="v2"}'
+        values: '0+9000x150'
+      - series: 'eta_prediction_minutes_count{model_version="v2"}'
+        values: '0+60x150'
+      # delivered orders: rush slice v1 MAE 8, v2 MAE 9 (+12.5 %); overall slice v2 is fine (6.1 vs 6.0)
+      - series: 'eta_delivered_abs_error_minutes_sum{model_version="v1",slice="rush"}'
+        values: '0+240x150'
+      - series: 'eta_delivered_abs_error_minutes_count{model_version="v1",slice="rush"}'
+        values: '0+30x150'
+      - series: 'eta_delivered_abs_error_minutes_sum{model_version="v2",slice="rush"}'
+        values: '0+27x150'
+      - series: 'eta_delivered_abs_error_minutes_count{model_version="v2",slice="rush"}'
+        values: '0+3x150'
+      - series: 'eta_delivered_abs_error_minutes_sum{model_version="v1",slice="all"}'
+        values: '0+600x150'
+      - series: 'eta_delivered_abs_error_minutes_count{model_version="v1",slice="all"}'
+        values: '0+100x150'
+      - series: 'eta_delivered_abs_error_minutes_sum{model_version="v2",slice="all"}'
+        values: '0+61x150'
+      - series: 'eta_delivered_abs_error_minutes_count{model_version="v2",slice="all"}'
+        values: '0+10x150'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: CanaryErrorRateHigh
+        exp_alerts:
+          - exp_labels: {model_version: v2, severity: page, action: rollback}
+            exp_annotations: {summary: "v2 5xx ratio 4.762% over 5m (limit 1%) - abort canary"}
+      - eval_time: 12m
+        alertname: CanaryLatencySLOBreach
+        exp_alerts:
+          - exp_labels: {model_version: v2, severity: page, action: rollback}
+            exp_annotations: {summary: "v2 p95 latency 100ms > 80ms SLO - abort canary"}
+      - eval_time: 50m
+        alertname: CanaryPredictionShift
+        exp_alerts:
+          - exp_labels: {model_version: v2, severity: page, action: rollback}
+            exp_annotations: {summary: "v2 mean predicted ETA differs from v1 by 20% over 30m - abort canary"}
+      - eval_time: 140m                   # 2 h window filled; v2 rush count = 3/min x 120 = 360 >= 200
+        alertname: CanaryAccuracyRegression
+        exp_alerts:
+          - exp_labels: {model_version: v2, slice: rush, severity: ticket, action: rollback}
+            exp_annotations: {summary: "v2 delivered-order MAE on slice rush is 9 min, > 1.05x v1 - abort canary"}
+      - eval_time: 30m                    # not enough delivered v2 orders yet (90 < 200): must stay quiet
+        alertname: CanaryAccuracyRegression
+        exp_alerts: []
+
+  # ------------------------------------------------------------------ v2 healthy -> nothing fires
+  - interval: 1m
+    input_series:
+      - series: 'eta_requests_total{model_version="v1",path="/v1/models/eta:predict",status="200"}'
+        values: '0+600x150'
+      - series: 'eta_requests_total{model_version="v2",path="/v1/models/eta:predict",status="200"}'
+        values: '0+60x150'
+      - series: 'eta_request_latency_seconds_bucket{model_version="v2",le="0.01"}'
+        values: '0+58x150'
+      - series: 'eta_request_latency_seconds_bucket{model_version="v2",le="0.1"}'
+        values: '0+60x150'
+      - series: 'eta_request_latency_seconds_bucket{model_version="v2",le="+Inf"}'
+        values: '0+60x150'
+      - series: 'eta_prediction_minutes_sum{model_version="v1"}'
+        values: '0+75000x150'
+      - series: 'eta_prediction_minutes_count{model_version="v1"}'
+        values: '0+600x150'
+      - series: 'eta_prediction_minutes_sum{model_version="v2"}'
+        values: '0+7560x150'                # mean 126 min: +0.8 %, inside the 10 % band
+      - series: 'eta_prediction_minutes_count{model_version="v2"}'
+        values: '0+60x150'
+      - series: 'eta_delivered_abs_error_minutes_sum{model_version="v1",slice="rush"}'
+        values: '0+240x150'
+      - series: 'eta_delivered_abs_error_minutes_count{model_version="v1",slice="rush"}'
+        values: '0+30x150'
+      - series: 'eta_delivered_abs_error_minutes_sum{model_version="v2",slice="rush"}'
+        values: '0+15x150'                  # MAE 5 < 8: better
+      - series: 'eta_delivered_abs_error_minutes_count{model_version="v2",slice="rush"}'
+        values: '0+3x150'
+    alert_rule_test:
+      - {eval_time: 140m, alertname: CanaryErrorRateHigh, exp_alerts: []}
+      - {eval_time: 140m, alertname: CanaryLatencySLOBreach, exp_alerts: []}
+      - {eval_time: 140m, alertname: CanaryPredictionShift, exp_alerts: []}
+      - {eval_time: 140m, alertname: CanaryAccuracyRegression, exp_alerts: []}

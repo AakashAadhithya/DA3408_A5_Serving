@@ -1,0 +1,44 @@
+# Ray Serve declarative config for the SwiftParcel sticky canary (generated with `serve build`, then trimmed).
+# Deploy (from partC/, data/ must exist one level up):
+#   ray start --head --num-cpus 2 && serve deploy serve_config.yaml     # or:  serve run serve_config.yaml
+# Promote / roll back = edit `weight` below and re-deploy: only EtaRouter is updated, model replicas stay warm.
+
+proxy_location: HeadOnly
+
+http_options:
+  host: 127.0.0.1
+  port: 8100
+
+logging_config:
+  log_level: WARNING
+
+applications:
+  - name: eta
+    route_prefix: /
+    import_path: eta_ray:app_builder
+    args:
+      weight: 0.1                # share of CUSTOMERS on the candidate (sticky, hashed on customer_id)
+      extra_work_ms: 0.0
+    deployments:
+      - name: EtaModelV1         # prod: fixed size
+        num_replicas: 2
+        max_ongoing_requests: 16
+        ray_actor_options:
+          num_cpus: 0.25
+      - name: EtaModelV2         # candidate: autoscaled
+        max_ongoing_requests: 16
+        autoscaling_config:
+          min_replicas: 1
+          initial_replicas: 1
+          max_replicas: 3        # 0.25 + 2x0.25 + 3x0.25 = 1.5 CPU <= 2
+          target_ongoing_requests: 2
+          upscale_delay_s: 5
+          downscale_delay_s: 60
+          metrics_interval_s: 2
+          look_back_period_s: 10
+        ray_actor_options:
+          num_cpus: 0.25
+      - name: EtaRouter
+        num_replicas: 1
+        ray_actor_options:
+          num_cpus: 0.25

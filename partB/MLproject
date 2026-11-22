@@ -1,0 +1,21 @@
+name: swiftparcel-eta-serving
+
+python_env: python_env.yaml
+
+# Run from the submission root, e.g.
+#   export MLFLOW_TRACKING_URI=sqlite:///mlflow.db
+#   mlflow run partB -e register --env-manager local --experiment-name eta-serving
+#   mlflow run partB -e gate -P min_rel_gain=0.60 --env-manager local --experiment-name eta-serving
+entry_points:
+  register:
+    command: "python eta_mlflow.py register"
+  gate:
+    parameters:
+      min_rel_gain: {type: float, default: 0.03}
+      max_p95_ms: {type: float, default: 10.0}
+      max_slice_regression: {type: float, default: 0.05}
+    command: "python eta_mlflow.py gate --min-rel-gain {min_rel_gain} --max-p95-ms {max_p95_ms} --max-slice-regression {max_slice_regression}"
+  shadow:
+    command: "python shadow.py"
+  test:
+    command: "python -m pytest -q test_gate.py"
